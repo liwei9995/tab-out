@@ -283,6 +283,33 @@ async function dismissSavedTab(id) {
   }
 }
 
+/**
+ * reorderSavedTabs(group, orderedIds)
+ *
+ * Reorders active or archived items in chrome.storage.local.
+ * @param {'active' | 'archived'} group
+ * @param {string[]} orderedIds — item IDs in the new order
+ */
+async function reorderSavedTabs(group, orderedIds) {
+  const { deferred = [] } = await chrome.storage.local.get('deferred');
+  const active    = deferred.filter(t => !t.dismissed && !t.completed);
+  const archived  = deferred.filter(t => !t.dismissed && t.completed);
+  const dismissed = deferred.filter(t => t.dismissed);
+
+  const applyOrder = (items, ids) => {
+    const byId = new Map(items.map(t => [t.id, t]));
+    const next = ids.map(id => byId.get(id)).filter(Boolean);
+    items.forEach(t => { if (!ids.includes(t.id)) next.push(t); });
+    return next;
+  };
+
+  const next = group === 'active'
+    ? [...applyOrder(active, orderedIds), ...archived, ...dismissed]
+    : [...active, ...applyOrder(archived, orderedIds), ...dismissed];
+
+  await chrome.storage.local.set({ deferred: next });
+}
+
 
 /* ----------------------------------------------------------------
    UI HELPERS
@@ -901,6 +928,10 @@ function renderDomainCard(group) {
    SAVED FOR LATER — Render Checklist Column
    ---------------------------------------------------------------- */
 
+const DRAG_HANDLE_HTML = `<span class="deferred-drag-handle" role="button" tabindex="-1" aria-label="Reorder" title="Drag to reorder">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
+</span>`;
+
 /**
  * renderDeferredColumn()
  *
@@ -972,13 +1003,14 @@ function renderDeferredItem(item) {
   return `
     <div class="deferred-item" data-deferred-id="${item.id}">
       <input type="checkbox" class="deferred-checkbox" data-action="check-deferred" data-deferred-id="${item.id}">
+      ${DRAG_HANDLE_HTML}
       <div class="deferred-info">
         <a href="${item.url}" class="deferred-title" title="${(item.title || '').replace(/"/g, '&quot;')}">
           <img src="${faviconUrl}" alt="" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px" onerror="this.style.display='none'">${item.title || item.url}
         </a>
         <div class="deferred-meta">
-          <span>${domain}</span>
-          <span>${ago}</span>
+          <span class="deferred-meta-domain">${domain}</span>
+          <span class="deferred-meta-time">${ago}</span>
         </div>
       </div>
       <button class="deferred-dismiss" data-action="dismiss-deferred" data-deferred-id="${item.id}" title="Dismiss">
@@ -999,13 +1031,14 @@ function renderArchiveItem(item) {
 
   return `
     <div class="archive-item" data-deferred-id="${item.id}">
+      ${DRAG_HANDLE_HTML}
       <div class="deferred-info">
         <a href="${item.url}" class="archive-item-title" title="${(item.title || '').replace(/"/g, '&quot;')}">
           ${item.title || item.url}
         </a>
         <div class="deferred-meta">
-          <span>${domain}</span>
-          <span>${ago}</span>
+          <span class="deferred-meta-domain">${domain}</span>
+          <span class="deferred-meta-time">${ago}</span>
         </div>
       </div>
       <button class="deferred-dismiss" data-action="dismiss-deferred" data-deferred-id="${item.id}" title="Dismiss">
@@ -1444,6 +1477,100 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+// ---- Drag-to-reorder saved for later / archive lists ----
+let sortableDrag = null;
+
+function moveSortableItem(listEl, itemSelector, draggingItem, clientY) {
+  const siblings = [...listEl.querySelectorAll(itemSelector)];
+  for (const sibling of siblings) {
+    if (sibling === draggingItem) continue;
+    const rect = sibling.getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) {
+      listEl.insertBefore(draggingItem, sibling);
+      return;
+    }
+  }
+  listEl.appendChild(draggingItem);
+}
+
+function finishSortableDrag() {
+  if (!sortableDrag) return;
+  const { ghost, item, listEl, itemSelector } = sortableDrag;
+  ghost.remove();
+  item.classList.remove('sortable-source-hidden');
+  document.body.classList.remove('sortable-dragging');
+  document.removeEventListener('mousemove', onSortableDragMove);
+  document.removeEventListener('mouseup', onSortableDragEnd);
+  sortableDrag = null;
+}
+
+function onSortableDragMove(e) {
+  if (!sortableDrag) return;
+  const { ghost, item, listEl, itemSelector, offsetX, offsetY } = sortableDrag;
+  ghost.style.left = `${e.clientX - offsetX}px`;
+  ghost.style.top = `${e.clientY - offsetY}px`;
+  moveSortableItem(listEl, itemSelector, item, e.clientY);
+}
+
+async function onSortableDragEnd() {
+  if (!sortableDrag) return;
+  const { listEl, itemSelector, group } = sortableDrag;
+  const ids = [...listEl.querySelectorAll(itemSelector)]
+    .map(el => el.dataset.deferredId)
+    .filter(Boolean);
+  finishSortableDrag();
+  await reorderSavedTabs(group, ids);
+}
+
+function setupSortableList(listEl, { itemSelector, group, searchInputId }) {
+  if (!listEl || listEl.dataset.sortableBound) return;
+  listEl.dataset.sortableBound = '1';
+
+  listEl.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || sortableDrag) return;
+    const handle = e.target.closest('.deferred-drag-handle');
+    if (!handle) return;
+    if (searchInputId) {
+      const q = document.getElementById(searchInputId)?.value.trim();
+      if (q && q.length >= 2) return;
+    }
+
+    const item = handle.closest(itemSelector);
+    if (!item) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // ponytail: cleanup orphaned ghosts from interrupted drags
+    document.querySelectorAll('.sortable-ghost').forEach(el => el.remove());
+
+    const rect = item.getBoundingClientRect();
+    const ghost = item.cloneNode(true);
+    ghost.classList.add('sortable-ghost');
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.left = `${rect.left}px`;
+    ghost.style.top = `${rect.top}px`;
+    document.body.appendChild(ghost);
+
+    item.classList.add('sortable-source-hidden');
+    document.body.classList.add('sortable-dragging');
+
+    sortableDrag = {
+      listEl,
+      item,
+      ghost,
+      itemSelector,
+      group,
+      offsetX: e.clientX - rect.left,
+      offsetY: e.clientY - rect.top,
+    };
+
+    document.addEventListener('mousemove', onSortableDragMove);
+    document.addEventListener('mouseup', onSortableDragEnd);
+  });
+}
+
 // ---- Archive toggle — expand/collapse the archive section ----
 document.addEventListener('click', (e) => {
   const toggle = e.target.closest('#archiveToggle');
@@ -1490,4 +1617,14 @@ document.addEventListener('input', async (e) => {
 /* ----------------------------------------------------------------
    INITIALIZE
    ---------------------------------------------------------------- */
+document.querySelectorAll('.deferred-drag-ghost, .sortable-ghost').forEach(el => el.remove());
+setupSortableList(document.getElementById('deferredList'), {
+  itemSelector: '.deferred-item',
+  group: 'active',
+});
+setupSortableList(document.getElementById('archiveList'), {
+  itemSelector: '.archive-item',
+  group: 'archived',
+  searchInputId: 'archiveSearch',
+});
 renderDashboard();

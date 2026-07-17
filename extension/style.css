@@ -936,6 +936,65 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
   border-bottom: none;
 }
 
+/* Drag handle */
+.deferred-drag-handle {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: grab;
+  padding: 0;
+  opacity: 0.25;
+  flex-shrink: 0;
+  margin-top: 2px;
+  touch-action: none;
+}
+
+.deferred-drag-handle svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.deferred-drag-handle:active {
+  cursor: grabbing;
+}
+
+.deferred-item:hover .deferred-drag-handle,
+.archive-item:hover .deferred-drag-handle {
+  opacity: 0.5;
+}
+
+.deferred-drag-handle:hover {
+  opacity: 1;
+}
+
+.deferred-item.sortable-source-hidden,
+.archive-item.sortable-source-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sortable-ghost {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  margin: 0;
+  box-shadow: 0 10px 30px rgba(26, 22, 19, 0.14);
+  background: var(--card-bg);
+  border: 1px solid var(--warm-gray);
+  border-radius: 8px;
+  animation: none;
+}
+
+body.sortable-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+body.sortable-dragging .deferred-drag-handle {
+  cursor: grabbing;
+}
+
 /* Custom checkbox */
 .deferred-checkbox {
   appearance: none;
@@ -999,7 +1058,22 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
   color: var(--muted);
   margin-top: 2px;
   display: flex;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.deferred-meta-domain {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deferred-meta-time {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* Checked-off item — strikethrough + faded */
