@@ -1121,13 +1121,13 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
   color: var(--muted);
 }
 
-/* Archive items are simpler — just title + domain + date */
+/* Archive items — same title + meta layout as saved-for-later */
 .archive-item {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  border-bottom: 1px solid rgba(154, 145, 138, 0.08);
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(154, 145, 138, 0.12);
 }
 
 .archive-item:last-child {
@@ -1135,24 +1135,22 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
 }
 
 .archive-item-title {
-  font-size: 12px;
-  color: var(--muted);
+  font-size: 13px;
+  color: var(--ink);
   text-decoration: none;
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
-  min-width: 0;
   transition: color 0.15s;
 }
 
 .archive-item-title:hover {
-  color: var(--ink);
+  color: var(--accent-amber);
 }
 
-.archive-item-date {
-  font-size: 10px;
-  color: var(--muted);
-  opacity: 0.6;
-  flex-shrink: 0;
+.archive-item.removing {
+  opacity: 0;
+  transform: translateX(20px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
 }
