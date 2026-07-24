@@ -1605,7 +1605,9 @@ document.addEventListener('click', (e) => {
 let titleClickTimer = null;
 document.addEventListener('click', (e) => {
   const titleEl = e.target.closest('.deferred-title, .archive-item-title');
-  if (!titleEl || titleEl.querySelector('.deferred-title-input')) return;
+  if (!titleEl) return;
+  // While editing, swallow clicks so the enclosing <a> never navigates.
+  if (titleEl.querySelector('.deferred-title-input')) { e.preventDefault(); return; }
   if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
 
   e.preventDefault();
@@ -1633,6 +1635,8 @@ document.addEventListener('dblclick', (e) => {
   input.value = current;
 
   const prev = titleEl.innerHTML;
+  const prevHref = titleEl.getAttribute('href');
+  titleEl.removeAttribute('href'); // can't navigate while editing
   titleEl.innerHTML = '';
   titleEl.appendChild(input);
   input.focus();
@@ -1647,6 +1651,7 @@ document.addEventListener('dblclick', (e) => {
       await renderDeferredColumn();
     } else {
       titleEl.innerHTML = prev; // restore
+      if (prevHref !== null) titleEl.setAttribute('href', prevHref);
     }
   };
 
