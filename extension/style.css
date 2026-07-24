@@ -1053,6 +1053,18 @@ body.sortable-dragging .deferred-drag-handle {
   color: var(--accent-amber);
 }
 
+.deferred-title-input {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--accent-amber);
+  background: transparent;
+  padding: 0;
+  outline: none;
+}
+
 .deferred-meta {
   font-size: 11px;
   color: var(--muted);

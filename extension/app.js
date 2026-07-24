@@ -284,6 +284,22 @@ async function dismissSavedTab(id) {
 }
 
 /**
+ * renameSavedTab(id, title)
+ *
+ * Sets a custom title on a saved tab. Empty/blank title is ignored.
+ */
+async function renameSavedTab(id, title) {
+  const clean = (title || '').trim();
+  if (!clean) return;
+  const { deferred = [] } = await chrome.storage.local.get('deferred');
+  const tab = deferred.find(t => t.id === id);
+  if (tab) {
+    tab.title = clean;
+    await chrome.storage.local.set({ deferred });
+  }
+}
+
+/**
  * reorderSavedTabs(group, orderedIds)
  *
  * Reorders active or archived items in chrome.storage.local.
@@ -1581,6 +1597,64 @@ document.addEventListener('click', (e) => {
   if (body) {
     body.style.display = body.style.display === 'none' ? 'block' : 'none';
   }
+});
+
+// ---- Saved/archive titles are <a>: plain left-click opens (after a short delay so a
+//      double-click can cancel it and rename inline instead). Modifier/middle
+//      clicks fall through to the browser (open in new tab, etc.). ----
+let titleClickTimer = null;
+document.addEventListener('click', (e) => {
+  const titleEl = e.target.closest('.deferred-title, .archive-item-title');
+  if (!titleEl || titleEl.querySelector('.deferred-title-input')) return;
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+
+  e.preventDefault();
+  clearTimeout(titleClickTimer);
+  const href = titleEl.getAttribute('href');
+  titleClickTimer = setTimeout(() => { if (href) window.location.href = href; }, 220);
+});
+
+document.addEventListener('dblclick', (e) => {
+  const titleEl = e.target.closest('.deferred-title, .archive-item-title');
+  if (!titleEl) return;
+  const row = titleEl.closest('[data-deferred-id]');
+  if (!row) return;
+
+  clearTimeout(titleClickTimer); // cancel the pending navigation
+  e.preventDefault();
+  if (titleEl.querySelector('.deferred-title-input')) return; // already editing
+
+  const id = row.dataset.deferredId;
+  const current = titleEl.textContent.trim();
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'deferred-title-input';
+  input.value = current;
+
+  const prev = titleEl.innerHTML;
+  titleEl.innerHTML = '';
+  titleEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const commit = async (save) => {
+    if (done) return;
+    done = true;
+    if (save && input.value.trim() && input.value.trim() !== current) {
+      await renameSavedTab(id, input.value);
+      await renderDeferredColumn();
+    } else {
+      titleEl.innerHTML = prev; // restore
+    }
+  };
+
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter')  { ev.preventDefault(); commit(true); }
+    if (ev.key === 'Escape') { ev.preventDefault(); commit(false); }
+  });
+  input.addEventListener('blur', () => commit(true));
 });
 
 // ---- Archive search — filter archived items as user types ----
