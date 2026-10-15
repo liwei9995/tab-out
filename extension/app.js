@@ -300,6 +300,38 @@ async function renameSavedTab(id, title) {
 }
 
 /**
+ * updateSavedTabUrl(id, url)
+ *
+ * Updates the URL of a saved tab. Normalizes protocol if missing.
+ * Returns true if updated successfully, false otherwise.
+ */
+async function updateSavedTabUrl(id, url) {
+  let clean = (url || '').trim();
+  if (!clean) return false;
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(clean)) {
+    clean = 'https://' + clean;
+  }
+  try {
+    new URL(clean);
+  } catch {
+    return false;
+  }
+
+  const { deferred = [] } = await chrome.storage.local.get('deferred');
+  const tab = deferred.find(t => t.id === id);
+  if (tab) {
+    const oldUrl = tab.url;
+    tab.url = clean;
+    if (!tab.title || tab.title === oldUrl || tab.title === oldUrl.replace(/\/$/, '')) {
+      tab.title = clean;
+    }
+    await chrome.storage.local.set({ deferred });
+    return true;
+  }
+  return false;
+}
+
+/**
  * reorderSavedTabs(group, orderedIds)
  *
  * Reorders active or archived items in chrome.storage.local.
@@ -998,10 +1030,36 @@ async function renderDeferredColumn() {
       archiveEl.style.display = 'none';
     }
 
+    // Adjust height so list is fully viewable within viewport without footer overlap
+    updateDeferredColumnHeight();
+
   } catch (err) {
     console.warn('[tab-out] Could not load saved tabs:', err);
     column.style.display = 'none';
   }
+}
+
+/**
+ * updateDeferredColumnHeight()
+ *
+ * Dynamically adjusts the max-height of the "Saved for Later" column so that its
+ * bottom edge never overflows the visible viewport or gets obstructed by Chrome's
+ * bottom New Tab Page footer ("Customize Chrome").
+ */
+function updateDeferredColumnHeight() {
+  const column = document.getElementById('deferredColumn');
+  if (!column || column.style.display === 'none') return;
+
+  if (window.innerWidth <= 800) {
+    column.style.maxHeight = '';
+    return;
+  }
+
+  const top = column.getBoundingClientRect().top;
+  // Chrome NTP bottom bar is ~50px high. Clearance of 72px ensures comfort above it.
+  const bottomClearance = 72;
+  const maxH = Math.max(200, window.innerHeight - top - bottomClearance);
+  column.style.maxHeight = `${maxH}px`;
 }
 
 /**
@@ -1015,17 +1073,19 @@ function renderDeferredItem(item) {
   try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
   const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
   const ago = timeAgo(item.savedAt);
+  const safeUrl = (item.url || '').replace(/"/g, '&quot;');
+  const safeTitle = (item.title || '').replace(/"/g, '&quot;');
 
   return `
     <div class="deferred-item" data-deferred-id="${item.id}">
       <input type="checkbox" class="deferred-checkbox" data-action="check-deferred" data-deferred-id="${item.id}">
       ${DRAG_HANDLE_HTML}
       <div class="deferred-info">
-        <a href="${item.url}" class="deferred-title" title="${(item.title || '').replace(/"/g, '&quot;')}">
+        <a href="${item.url}" class="deferred-title" title="${safeTitle}&#10;Double-click to rename">
           <img src="${faviconUrl}" alt="" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px" onerror="this.style.display='none'">${item.title || item.url}
         </a>
         <div class="deferred-meta">
-          <span class="deferred-meta-domain">${domain}</span>
+          <span class="deferred-meta-domain" data-url="${safeUrl}" title="${safeUrl}&#10;Double-click to edit URL">${domain}</span>
           <span class="deferred-meta-time">${ago}</span>
         </div>
       </div>
@@ -1044,16 +1104,18 @@ function renderArchiveItem(item) {
   let domain = '';
   try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
   const ago = timeAgo(item.savedAt);
+  const safeUrl = (item.url || '').replace(/"/g, '&quot;');
+  const safeTitle = (item.title || '').replace(/"/g, '&quot;');
 
   return `
     <div class="archive-item" data-deferred-id="${item.id}">
       ${DRAG_HANDLE_HTML}
       <div class="deferred-info">
-        <a href="${item.url}" class="archive-item-title" title="${(item.title || '').replace(/"/g, '&quot;')}">
+        <a href="${item.url}" class="archive-item-title" title="${safeTitle}&#10;Double-click to rename">
           ${item.title || item.url}
         </a>
         <div class="deferred-meta">
-          <span class="deferred-meta-domain">${domain}</span>
+          <span class="deferred-meta-domain" data-url="${safeUrl}" title="${safeUrl}&#10;Double-click to edit URL">${domain}</span>
           <span class="deferred-meta-time">${ago}</span>
         </div>
       </div>
@@ -1619,12 +1681,12 @@ document.addEventListener('click', (e) => {
 document.addEventListener('dblclick', (e) => {
   const titleEl = e.target.closest('.deferred-title, .archive-item-title');
   if (!titleEl) return;
+  if (titleEl.querySelector('.deferred-title-input')) return; // already editing
   const row = titleEl.closest('[data-deferred-id]');
   if (!row) return;
 
   clearTimeout(titleClickTimer); // cancel the pending navigation
   e.preventDefault();
-  if (titleEl.querySelector('.deferred-title-input')) return; // already editing
 
   const id = row.dataset.deferredId;
   const current = titleEl.textContent.trim();
@@ -1652,6 +1714,64 @@ document.addEventListener('dblclick', (e) => {
     } else {
       titleEl.innerHTML = prev; // restore
       if (prevHref !== null) titleEl.setAttribute('href', prevHref);
+    }
+  };
+
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter')  { ev.preventDefault(); commit(true); }
+    if (ev.key === 'Escape') { ev.preventDefault(); commit(false); }
+  });
+  input.addEventListener('blur', () => commit(true));
+});
+
+// ---- Saved/archive domain: double-click edits URL inline ----
+document.addEventListener('dblclick', (e) => {
+  const domainEl = e.target.closest('.deferred-meta-domain');
+  if (!domainEl) return;
+  if (domainEl.querySelector('.deferred-url-input')) return; // already editing
+  const row = domainEl.closest('[data-deferred-id]');
+  if (!row) return;
+
+  e.preventDefault();
+
+  const id = row.dataset.deferredId;
+  const currentUrl = domainEl.dataset.url || row.querySelector('.deferred-title, .archive-item-title')?.getAttribute('href') || '';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'deferred-url-input';
+  input.value = currentUrl;
+  input.placeholder = 'https://...';
+  input.setAttribute('spellcheck', 'false');
+
+  const prevHtml = domainEl.innerHTML;
+  const timeEl = domainEl.parentElement ? domainEl.parentElement.querySelector('.deferred-meta-time') : null;
+  const prevTimeDisplay = timeEl ? timeEl.style.display : '';
+  if (timeEl) timeEl.style.display = 'none';
+
+  domainEl.innerHTML = '';
+  domainEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const commit = async (save) => {
+    if (done) return;
+    done = true;
+    const newVal = input.value.trim();
+    if (save && newVal && newVal !== currentUrl) {
+      const updated = await updateSavedTabUrl(id, newVal);
+      if (updated) {
+        showToast('URL updated');
+        await renderDeferredColumn();
+      } else {
+        showToast('Invalid URL');
+        domainEl.innerHTML = prevHtml;
+        if (timeEl) timeEl.style.display = prevTimeDisplay;
+      }
+    } else {
+      domainEl.innerHTML = prevHtml;
+      if (timeEl) timeEl.style.display = prevTimeDisplay;
     }
   };
 
@@ -1707,3 +1827,5 @@ setupSortableList(document.getElementById('archiveList'), {
   searchInputId: 'archiveSearch',
 });
 renderDashboard();
+window.addEventListener('resize', updateDeferredColumnHeight);
+window.addEventListener('scroll', updateDeferredColumnHeight, { passive: true });
