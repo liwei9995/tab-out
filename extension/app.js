@@ -228,12 +228,13 @@ async function closeTabOutDupes() {
 async function saveTabForLater(tab) {
   const { deferred = [] } = await chrome.storage.local.get('deferred');
   deferred.push({
-    id:        Date.now().toString(),
-    url:       tab.url,
-    title:     tab.title,
-    savedAt:   new Date().toISOString(),
-    completed: false,
-    dismissed: false,
+    id:         Date.now().toString(),
+    url:        tab.url,
+    title:      tab.title,
+    favIconUrl: tab.favIconUrl || '',
+    savedAt:    new Date().toISOString(),
+    completed:  false,
+    dismissed:  false,
   });
   await chrome.storage.local.set({ deferred });
 }
@@ -766,6 +767,23 @@ function smartTitle(title, url) {
   return title || url;
 }
 
+/**
+ * Returns a Chrome internal favicon URL for the given page URL.
+ * Uses Chrome MV3's native _favicon/ endpoint (enabled via "favicon" permission).
+ * Resolves locally for localhost, internal networks, and web pages without external network queries.
+ */
+function getFaviconUrl(pageUrl, size = 16) {
+  if (!pageUrl) return '';
+  try {
+    const url = new URL(chrome.runtime.getURL('/_favicon/'));
+    url.searchParams.set('pageUrl', pageUrl);
+    url.searchParams.set('size', size.toString());
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
 
 /* ----------------------------------------------------------------
    SVG ICON STRINGS
@@ -840,14 +858,13 @@ function buildOverflowChips(hiddenTabs, urlCounts = {}) {
     const chipClass = count > 1 ? ' chip-has-dupes' : '';
     const safeUrl   = (tab.url || '').replace(/"/g, '&quot;');
     const safeTitle = label.replace(/"/g, '&quot;');
-    let domain = '';
-    try { domain = new URL(tab.url).hostname; } catch {}
-    const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
+    const faviconUrl  = tab.favIconUrl || getFaviconUrl(tab.url);
+    const safeFavicon = (tab.favIconUrl || '').replace(/"/g, '&quot;');
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
       ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
       <span class="chip-text">${label}</span>${dupeTag}
       <div class="chip-actions">
-        <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="Save for later">
+        <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" data-tab-favicon="${safeFavicon}" title="Save for later">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" /></svg>
         </button>
         <button class="chip-action chip-close" data-action="close-single-tab" data-tab-url="${safeUrl}" title="Close this tab">
@@ -921,14 +938,13 @@ function renderDomainCard(group) {
     const chipClass = count > 1 ? ' chip-has-dupes' : '';
     const safeUrl   = (tab.url || '').replace(/"/g, '&quot;');
     const safeTitle = label.replace(/"/g, '&quot;');
-    let domain = '';
-    try { domain = new URL(tab.url).hostname; } catch {}
-    const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
+    const faviconUrl  = tab.favIconUrl || getFaviconUrl(tab.url);
+    const safeFavicon = (tab.favIconUrl || '').replace(/"/g, '&quot;');
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
       ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
       <span class="chip-text">${label}</span>${dupeTag}
       <div class="chip-actions">
-        <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="Save for later">
+        <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" data-tab-favicon="${safeFavicon}" title="Save for later">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" /></svg>
         </button>
         <button class="chip-action chip-close" data-action="close-single-tab" data-tab-url="${safeUrl}" title="Close this tab">
@@ -1071,7 +1087,8 @@ function updateDeferredColumnHeight() {
 function renderDeferredItem(item) {
   let domain = '';
   try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
-  const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
+  const isLocal = domain === 'localhost' || domain === '127.0.0.1' || !domain;
+  const faviconUrl = item.favIconUrl || (isLocal ? getFaviconUrl(item.url) : `https://www.google.com/s2/favicons?domain=${domain}&sz=16`);
   const ago = timeAgo(item.savedAt);
   const safeUrl = (item.url || '').replace(/"/g, '&quot;');
   const safeTitle = (item.title || '').replace(/"/g, '&quot;');
@@ -1389,22 +1406,25 @@ document.addEventListener('click', async (e) => {
   // ---- Save a single tab for later (then close it) ----
   if (action === 'defer-single-tab') {
     e.stopPropagation();
-    const tabUrl   = actionEl.dataset.tabUrl;
-    const tabTitle = actionEl.dataset.tabTitle || tabUrl;
+    const tabUrl     = actionEl.dataset.tabUrl;
+    const tabTitle   = actionEl.dataset.tabTitle || tabUrl;
+    const tabFavicon = actionEl.dataset.tabFavicon || '';
     if (!tabUrl) return;
+
+    // Close the tab in Chrome & grab favicon
+    const allTabs    = await chrome.tabs.query({});
+    const match      = allTabs.find(t => t.url === tabUrl);
+    const favIconUrl = tabFavicon || match?.favIconUrl || '';
 
     // Save to chrome.storage.local
     try {
-      await saveTabForLater({ url: tabUrl, title: tabTitle });
+      await saveTabForLater({ url: tabUrl, title: tabTitle, favIconUrl });
     } catch (err) {
       console.error('[tab-out] Failed to save tab:', err);
       showToast('Failed to save tab');
       return;
     }
 
-    // Close the tab in Chrome
-    const allTabs = await chrome.tabs.query({});
-    const match   = allTabs.find(t => t.url === tabUrl);
     if (match) await chrome.tabs.remove(match.id);
     await fetchOpenTabs();
 
@@ -1829,3 +1849,10 @@ setupSortableList(document.getElementById('archiveList'), {
 renderDashboard();
 window.addEventListener('resize', updateDeferredColumnHeight);
 window.addEventListener('scroll', updateDeferredColumnHeight, { passive: true });
+
+// Gracefully hide any failed image loads (inline onerror is blocked by MV3 CSP)
+document.addEventListener('error', (e) => {
+  if (e.target && e.target.tagName === 'IMG') {
+    e.target.style.display = 'none';
+  }
+}, true);
